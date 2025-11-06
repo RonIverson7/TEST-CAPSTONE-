@@ -61,6 +61,34 @@ const HomeScreen = () => {
   const [profileModalVisible, setProfileModalVisible] = useState(false);
 
 
+  // Android hardware back: close Comments modal if open
+  useFocusEffect(
+    React.useCallback(() => {
+      if (Platform.OS !== 'android') return undefined;
+      const onBack = () => {
+        if (commentModalVisible) {
+          setCommentModalVisible(false);
+          return true; // consume
+        }
+        return false; // allow default
+      };
+      const sub = BackHandler.addEventListener('hardwareBackPress', onBack);
+      return () => sub.remove();
+    }, [commentModalVisible])
+  );
+
+  // Extra safety: when the comments modal is open, force-close on hardware back
+  useEffect(() => {
+    if (Platform.OS !== 'android') return;
+    if (!commentModalVisible) return;
+    const sub = BackHandler.addEventListener('hardwareBackPress', () => {
+      setCommentModalVisible(false);
+      return true;
+    });
+    return () => sub.remove();
+  }, [commentModalVisible]);
+
+
   const [firstName, setFirstName] = useState("");
   const [middleName, setMiddleName] = useState("");
   const [lastName, setLastName] = useState("");
@@ -1525,7 +1553,11 @@ const HomeScreen = () => {
 
 
       {/* Comments Modal */}
-      <Modal visible={commentModalVisible} animationType="slide">
+      <Modal
+        visible={commentModalVisible}
+        animationType="slide"
+        onRequestClose={() => setCommentModalVisible(false)}
+      >
         <SafeAreaView style={{ flex: 1, backgroundColor: '#f5f5f5' }}>
           <KeyboardAvoidingView
             behavior={Platform.OS === "ios" ? "padding" : "height"}
