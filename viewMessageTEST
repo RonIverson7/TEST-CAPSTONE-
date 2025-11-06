@@ -1,15 +1,15 @@
 import React, { useRef, useState, useEffect, useCallback } from 'react';
-import { SafeAreaView, View, Text, StyleSheet, FlatList, TextInput, Image, TouchableOpacity, Keyboard, Animated, Platform, BackHandler, KeyboardAvoidingView, RefreshControl, } from 'react-native';
+import { View, Text, StyleSheet, FlatList, TextInput, Image, TouchableOpacity, Platform, BackHandler, KeyboardAvoidingView, RefreshControl, Keyboard, Animated, Easing } from 'react-native';
 import { useLocalSearchParams, useFocusEffect, useRouter } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import Header from '../components/Header';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { supabase } from "../../supabase/supabaseClient";
 import io from 'socket.io-client';
 
 const API_BASE = "http://192.168.18.22:3000/api";
 const API_ORIGIN = API_BASE.replace(/\/api$/, "");
 const INPUT_BAR_BASE_HEIGHT = 56; // approximate input bar height
+const ANDROID_INPUT_BASELINE_OFFSET = -40; // manual downward adjustment for Android input bar
 
 const ViewMessageScreen = () => {
   const { conversationId, name: initialName, userId: initialUserId } = useLocalSearchParams();
@@ -29,6 +29,22 @@ const ViewMessageScreen = () => {
   const [refreshing, setRefreshing] = useState(false);
   const insets = useSafeAreaInsets();
   const keyboardHeight = useRef(new Animated.Value(0)).current;
+  const bottomInsetSpacing = Platform.OS === 'ios'
+    ? 8
+    : Math.max(insets.bottom, 8) + ANDROID_INPUT_BASELINE_OFFSET;
+  const [inputBarHeightMeasured, setInputBarHeightMeasured] = useState(
+    INPUT_BAR_BASE_HEIGHT + bottomInsetSpacing
+  );
+  const handleInputBarLayout = useCallback((event) => {
+    const nextHeight = event?.nativeEvent?.layout?.height ?? 0;
+    if (!Number.isFinite(nextHeight)) {
+      return;
+    }
+    const adjusted = Math.max(nextHeight, INPUT_BAR_BASE_HEIGHT + bottomInsetSpacing);
+    if (Math.abs(adjusted - inputBarHeightMeasured) > 0.5) {
+      setInputBarHeightMeasured(adjusted);
+    }
+  }, [bottomInsetSpacing, inputBarHeightMeasured]);
 
   const formatTitle = (name) => {
     if (!name) return 'Message';
@@ -48,30 +64,6 @@ const ViewMessageScreen = () => {
       return () => sub.remove();
     }, [router])
   );
-
-  useEffect(() => {
-    if (Platform.OS === 'android') {
-      const showSub = Keyboard.addListener('keyboardDidShow', (e) => {
-        Animated.timing(keyboardHeight, {
-          toValue: e.endCoordinates.height,
-          duration: 250,
-          useNativeDriver: false,
-        }).start();
-      });
-      const hideSub = Keyboard.addListener('keyboardDidHide', () => {
-        Animated.timing(keyboardHeight, {
-          toValue: 0,
-          duration: 250,
-          useNativeDriver: false,
-        }).start();
-      });
-
-      return () => {
-        showSub.remove();
-        hideSub.remove();
-      };
-    }
-  }, []);
 
   const renderItem = useCallback(({ item }) => {
     const isMe = item.sender === 'me';
@@ -317,6 +309,40 @@ const ViewMessageScreen = () => {
     };
   }, [API_ORIGIN, conversationId, meId]);
 
+  useEffect(() => {
+    if (Platform.OS !== 'android') {
+      return;
+    }
+
+    const animateKeyboard = (toValue) => {
+      keyboardHeight.stopAnimation();
+      Animated.timing(keyboardHeight, {
+        toValue,
+        duration: 220,
+        easing: Easing.out(Easing.quad),
+        useNativeDriver: false,
+      }).start(({ finished }) => {
+        if (finished) {
+          keyboardHeight.setValue(toValue);
+        }
+      });
+    };
+
+    const showSub = Keyboard.addListener('keyboardDidShow', (e) => {
+      const height = e?.endCoordinates?.height ?? 0;
+      animateKeyboard(height);
+    });
+
+    const hideSub = Keyboard.addListener('keyboardDidHide', () => {
+      animateKeyboard(0);
+    });
+
+    return () => {
+      showSub.remove();
+      hideSub.remove();
+    };
+  }, [keyboardHeight]);
+
   // Inverted FlatList automatically shows latest at bottom
 
   const handleSend = async () => {
@@ -373,10 +399,13 @@ const ViewMessageScreen = () => {
   };
 
   const InputBar = (
-    <View style={[
-      styles.inputContainerWrapper,
-      { paddingBottom: Platform.OS === 'ios' ? 8 : Math.max(insets.bottom, 8) }
-    ]}> 
+    <View
+      style={[
+        styles.inputContainerWrapper,
+        { paddingBottom: bottomInsetSpacing }
+      ]}
+      onLayout={handleInputBarLayout}
+    >
       <View style={styles.inputContainer}>
         <TouchableOpacity style={styles.mediaButton}>
           <Ionicons name="images-outline" size={20} color="#888" />
@@ -403,8 +432,6 @@ const ViewMessageScreen = () => {
 
   return (
     <SafeAreaView style={styles.container}>
-      <Header title="Message" showSearch={false} />
-      
       {/* Profile Header Container */}
       <View style={styles.profileHeader}>
         <TouchableOpacity 
@@ -430,8 +457,8 @@ const ViewMessageScreen = () => {
 
       {Platform.OS === 'ios' ? (
         <KeyboardAvoidingView
-          style={{ flex: 1 }}
           behavior="padding"
+          style={{ flex: 1 }}
           keyboardVerticalOffset={0}
         >
           <FlatList
@@ -442,7 +469,6 @@ const ViewMessageScreen = () => {
             renderItem={renderItem}
             inverted
             contentContainerStyle={[styles.chatContainer, { paddingTop: 8 }]}
-            style={{ flex: 1 }}
             keyboardShouldPersistTaps="handled"
             initialNumToRender={20}
             maxToRenderPerBatch={10}
@@ -475,7 +501,6 @@ const ViewMessageScreen = () => {
             renderItem={renderItem}
             inverted
             contentContainerStyle={[styles.chatContainer, { paddingTop: 8 }]}
-            style={{ flex: 1 }}
             keyboardShouldPersistTaps="handled"
             initialNumToRender={20}
             maxToRenderPerBatch={10}
@@ -488,10 +513,8 @@ const ViewMessageScreen = () => {
             scrollEventThrottle={8}
             bounces={true}
             ListHeaderComponent={
-              // Inverted list: header renders at the bottom visually.
-              // Add space for input bar + safe area and dynamic keyboard height.
               <View>
-                <View style={{ height: INPUT_BAR_BASE_HEIGHT + Math.max(insets.bottom, 8) }} />
+                <View style={{ height: inputBarHeightMeasured }} />
                 <Animated.View style={{ height: keyboardHeight }} />
               </View>
             }
@@ -504,7 +527,9 @@ const ViewMessageScreen = () => {
               />
             }
           />
-          <Animated.View style={{ position: 'absolute', left: 0, right: 0, bottom: keyboardHeight }}>
+          <Animated.View
+            style={{ position: 'absolute', left: 0, right: 0, bottom: keyboardHeight }}
+          >
             {InputBar}
           </Animated.View>
         </View>
@@ -514,12 +539,30 @@ const ViewMessageScreen = () => {
 };
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#fff' },
-  chatContainer: { padding: 10 },
-  messageRow: { flexDirection: 'row', marginBottom: 8, alignItems: 'flex-end' },
-  leftAlign: { justifyContent: 'flex-start' },
-  rightAlign: { justifyContent: 'flex-end' },
-  avatar: { width: 35, height: 35, borderRadius: 17.5, marginRight: 8 },
+  container: { 
+    flex: 1, 
+    backgroundColor: '#fff' 
+  },
+  chatContainer: { 
+    padding: 10 
+  },
+  messageRow: { 
+    flexDirection: 'row', 
+    marginBottom: 8, 
+    alignItems: 'flex-end' 
+  },
+  leftAlign: { 
+    justifyContent: 'flex-start' 
+  },
+  rightAlign: { 
+    justifyContent: 'flex-end' 
+  },
+  avatar: { 
+    width: 35, 
+    height: 35, 
+    borderRadius: 17.5, 
+    marginRight: 8 
+  },
   bubble: {
     maxWidth: '75%',
     paddingVertical: 10,
@@ -531,30 +574,51 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.1,
     shadowRadius: 1,
   },
-  otherBubble: { backgroundColor: '#f5f5f5' },
-  myBubble: { backgroundColor: '#E8DECC' },
-  messageText: { fontSize: 15, color: '#000' },
-  myMessageText: { color: '#000' },
-  timestamp: { fontSize: 10, color: '#888', marginTop: 4, alignSelf: 'flex-start' },
-  myTimestamp: { fontSize: 10, color: '#A68C7B', marginTop: 4, alignSelf: 'flex-end' },
-  inputContainerWrapper: { backgroundColor: '#fff' },
+  otherBubble: { 
+    backgroundColor: '#f5f5f5' 
+  },
+  myBubble: { 
+    backgroundColor: '#E8DECC' 
+  },
+  messageText: { 
+    fontSize: 15, 
+    color: '#000' 
+  },
+  myMessageText: { 
+    color: '#000' 
+  },
+  timestamp: { 
+    fontSize: 10, 
+    color: '#888', 
+    marginTop: 4, 
+    alignSelf: 'flex-start' 
+  },
+  myTimestamp: { 
+    fontSize: 10, 
+    color: '#A68C7B', 
+    marginTop: 4, 
+    alignSelf: 'flex-end' 
+  },
+  inputContainerWrapper: { 
+    backgroundColor: '#fff' 
+  },
   inputContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 15,
-    paddingVertical: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
     borderTopWidth: StyleSheet.hairlineWidth,
     borderTopColor: '#e0e0e0',
     backgroundColor: '#fff',
   },
   input: {
     flex: 1,
-    paddingVertical: 8,
+    paddingVertical: 6,
     paddingHorizontal: 12,
     fontSize: 15,
     borderRadius: 20,
     backgroundColor: '#f0f0f0',
-    marginHorizontal: 8,
+    marginHorizontal: 6,
     maxHeight: 100,
     textAlignVertical: 'center',
   },
