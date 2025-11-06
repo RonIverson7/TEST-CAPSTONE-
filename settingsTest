@@ -297,7 +297,15 @@ export default function SettingsScreen() {
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Profile</Text>
           <TouchableOpacity style={styles.item} onPress={openEditProfile}>
-            <Text style={styles.itemText}>Edit Profile</Text>
+            <View style={styles.itemRow}>
+              <View style={styles.itemLeft}>
+                <View style={styles.itemIconWrap}>
+                  <Ionicons name="person-circle-outline" size={20} color="#A68C7B" />
+                </View>
+                <Text style={styles.itemText}>Edit Profile</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color="#B0B0B0" />
+            </View>
           </TouchableOpacity>
         </View>
 
@@ -305,16 +313,36 @@ export default function SettingsScreen() {
           <Text style={styles.sectionTitle}>Applications</Text>
           {String(role || '').toLowerCase() === 'user' && (
             <TouchableOpacity 
-              style={[styles.item, hasPendingRequest && { opacity: 0.5 }]}
+              style={[styles.item, hasPendingRequest && styles.itemDisabled]}
               disabled={hasPendingRequest}
               onPress={handleApplyAsArtist}
             >
-              <Text style={styles.itemText}>Apply as Artist</Text>
+              <View style={styles.itemRow}>
+                <View style={styles.itemLeft}>
+                  <View style={styles.itemIconWrap}>
+                    <Ionicons name="color-palette-outline" size={20} color="#A68C7B" />
+                  </View>
+                  <Text style={styles.itemText}>Apply as Artist</Text>
+                </View>
+                {hasPendingRequest ? (
+                  <View style={styles.badge}><Text style={styles.badgeText}>Pending</Text></View>
+                ) : (
+                  <Ionicons name="chevron-forward" size={18} color="#B0B0B0" />
+                )}
+              </View>
             </TouchableOpacity>
           )}
           {String(role || '').toLowerCase() === 'artist' && (
             <TouchableOpacity style={styles.item} onPress={() => {}}>
-              <Text style={styles.itemText}>Apply as Seller (Coming Soon)</Text>
+              <View style={styles.itemRow}>
+                <View style={styles.itemLeft}>
+                  <View style={styles.itemIconWrap}>
+                    <Ionicons name="cart-outline" size={20} color="#A68C7B" />
+                  </View>
+                  <Text style={styles.itemText}>Apply as Seller (Coming Soon)</Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color="#B0B0B0" />
+              </View>
             </TouchableOpacity>
           )}
         </View>
@@ -490,10 +518,33 @@ export default function SettingsScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f5f5f5' },
   content: { padding: 16 },
-  section: { backgroundColor: '#fff', borderRadius: 12, marginBottom: 16, overflow: 'hidden' },
+  section: { 
+    backgroundColor: '#fff', 
+    borderRadius: 12, 
+    marginBottom: 16, 
+    overflow: 'hidden',
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.06,
+    shadowRadius: 4,
+  },
   sectionTitle: { fontSize: 16, fontWeight: '700', paddingHorizontal: 16, paddingVertical: 12, color: '#222', backgroundColor: '#f9f9f9', borderBottomWidth: 1, borderBottomColor: '#eee' },
   item: { paddingHorizontal: 16, paddingVertical: 14, borderBottomWidth: 1, borderBottomColor: '#f0f0f0' },
   itemText: { fontSize: 15, color: '#333' },
+  itemRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  itemLeft: { flexDirection: 'row', alignItems: 'center', gap: 10 },
+  itemIconWrap: { 
+    width: 28, 
+    height: 28, 
+    borderRadius: 6, 
+    backgroundColor: '#F4EFEA', 
+    alignItems: 'center', 
+    justifyContent: 'center' 
+  },
+  itemDisabled: { opacity: 0.5 },
+  badge: { backgroundColor: '#FFF2D6', paddingHorizontal: 10, paddingVertical: 4, borderRadius: 999 },
+  badgeText: { color: '#9A7B4F', fontSize: 12, fontWeight: '700' },
   uploadModalOverlay: { 
     flex: 1, 
     backgroundColor: 'rgba(0,0,0,0.5)', 
@@ -550,4 +601,3 @@ const styles = StyleSheet.create({
   categoryItem: { paddingVertical: 12, paddingHorizontal: 16, borderBottomWidth: 1, borderBottomColor: '#f0f0f0' },
   categoryItemText: { fontSize: 15, color: '#333' },
 });
-
