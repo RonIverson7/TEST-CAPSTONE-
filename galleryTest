@@ -7,7 +7,7 @@ import Header from '../components/Header';
 import * as ImagePicker from 'expo-image-picker';
 import { useUser } from '../contexts/UserContext';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-
+import AndroidFooterSpacer from '../components/Footer';
 const API_BASE = "http://192.168.18.22:3000/api";
 const API_ORIGIN = API_BASE.replace(/\/api$/, "");
 
@@ -665,11 +665,7 @@ const GalleryScreen = () => {
               </TouchableOpacity>
               {showCategoryDropdown && (
                 <View style={styles.categoryDropdown}>
-                  <ScrollView 
-                    style={{ maxHeight: 200 }}
-                    nestedScrollEnabled={Platform.OS === 'android'}
-                    showsVerticalScrollIndicator={true}
-                  >
+                  <ScrollView style={{ maxHeight: 200 }}>
                     {categories
                       .filter(cat => cat.field !== 'all')
                       .map((cat) => (
@@ -703,6 +699,7 @@ const GalleryScreen = () => {
         </View>
         </KeyboardAvoidingView>
       </Modal>
+      <AndroidFooterSpacer backgroundColor="#fff" />
     </SafeAreaView>
   );
 };
