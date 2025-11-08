@@ -400,10 +400,7 @@ const ViewMessageScreen = () => {
 
   const InputBar = (
     <View
-      style={[
-        styles.inputContainerWrapper,
-        { paddingBottom: bottomInsetSpacing }
-      ]}
+      style={styles.inputContainerWrapper}
       onLayout={handleInputBarLayout}
     >
       <View style={styles.inputContainer}>
@@ -599,8 +596,8 @@ const styles = StyleSheet.create({
     marginTop: 4, 
     alignSelf: 'flex-end' 
   },
-  inputContainerWrapper: { 
-    backgroundColor: '#fff' 
+  inputContainerWrapper: {
+    backgroundColor: '#fff'
   },
   inputContainer: {
     flexDirection: 'row',
