@@ -1,29 +1,23 @@
-import React, { useState, useEffect } from 'react';
-import { StyleSheet, View, Text, SafeAreaView, Image, TouchableOpacity, ScrollView, Modal, TextInput, RefreshControl, ActivityIndicator, Alert } from 'react-native';
+import React, { useState, useEffect, useCallback } from 'react';
+import { StyleSheet, View, Text, SafeAreaView, Image, TouchableOpacity, ScrollView, Modal, TextInput, Alert, ActivityIndicator } from 'react-native';
 import { Feather, Ionicons } from '@expo/vector-icons';
-import { useNavigation, useRouter } from 'expo-router';
+import { useNavigation, useRouter, useFocusEffect } from 'expo-router';
+import { supabase } from '../../supabase/supabaseClient';
 import Header from '../components/Header';
+import ProductDetailModal from '../components/ProductDetailModal';
 import { useUser } from '../contexts/UserContext';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { supabase } from "../../supabase/supabaseClient";
+import AndroidFooterSpacer from '../components/Footer';
+
+const API_BASE = "http://192.168.18.22:3000/api";
 
 const MarketplaceScreen = () => {
-  // Get user data from UserContext (for future features)
+  // Get user data from UserContext
   const { userData } = useUser();
   const insets = useSafeAreaInsets();
 
   const navigation = useNavigation();
   const router = useRouter();
-  
-  // API configuration - match artists.js pattern
-  const API_BASE = "http://192.168.18.22:3000/api";
-  
-  // Data states
-  const [marketplaceItems, setMarketplaceItems] = useState([]);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [accessToken, setAccessToken] = useState(null);
-  const [refreshToken, setRefreshToken] = useState(null);
   
   // Filter states
   const [showFilters, setShowFilters] = useState(false);
@@ -41,11 +35,76 @@ const MarketplaceScreen = () => {
   const [showSortDropdown, setShowSortDropdown] = useState(false);
   const [showCategoryDropdown, setShowCategoryDropdown] = useState(false);
 
-  // Cart states
+  // Cart & Product states
   const [showCart, setShowCart] = useState(false);
   const [cartItems, setCartItems] = useState([]);
+  const [marketplaceItems, setMarketplaceItems] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [selectedProduct, setSelectedProduct] = useState(null);
+  const [showProductModal, setShowProductModal] = useState(false);
 
-  // Cart helper functions
+  // Update cart quantity
+  const updateQuantity = async (cartItemId, newQuantity) => {
+    if (newQuantity <= 0) {
+      await removeItem(cartItemId);
+      return;
+    }
+    
+    try {
+      const { data } = await supabase.auth.getSession();
+      const at = data?.session?.access_token || '';
+      const rt = data?.session?.refresh_token || '';
+      
+      const response = await fetch(`${API_BASE}/marketplace/cart/${cartItemId}`, {
+        method: 'PUT',
+        credentials: 'include',
+        headers: {
+          'Content-Type': 'application/json',
+          Cookie: `access_token=${at}; refresh_token=${rt}`,
+          'Authorization': `Bearer ${at}`,
+        },
+        body: JSON.stringify({ quantity: newQuantity })
+      });
+
+      if (response.ok) {
+        await fetchCart();
+      } else {
+        Alert.alert('Error', 'Failed to update quantity');
+      }
+    } catch (error) {
+      console.error('Error updating quantity:', error);
+      Alert.alert('Error', 'Failed to update quantity');
+    }
+  };
+
+  // Remove item from cart
+  const removeItem = async (cartItemId) => {
+    try {
+      const { data } = await supabase.auth.getSession();
+      const at = data?.session?.access_token || '';
+      const rt = data?.session?.refresh_token || '';
+      
+      const response = await fetch(`${API_BASE}/marketplace/cart/${cartItemId}`, {
+        method: 'DELETE',
+        credentials: 'include',
+        headers: {
+          Cookie: `access_token=${at}; refresh_token=${rt}`,
+          'Authorization': `Bearer ${at}`,
+        },
+      });
+
+      if (response.ok) {
+        await fetchCart();
+        Alert.alert('Success', 'Item removed from cart');
+      } else {
+        Alert.alert('Error', 'Failed to remove item');
+      }
+    } catch (error) {
+      console.error('Error removing item:', error);
+      Alert.alert('Error', 'Failed to remove item');
+    }
+  };
+
   const getCartTotal = () => {
     return cartItems.reduce((sum, item) => sum + (item.price * item.quantity), 0);
   };
@@ -54,266 +113,181 @@ const MarketplaceScreen = () => {
     return cartItems.reduce((sum, item) => sum + item.quantity, 0);
   };
 
-  // Fetch marketplace items from backend
-  const fetchMarketplaceItems = async (at, rt) => {
+  // Fetch marketplace items from API
+  const fetchMarketplaceItems = useCallback(async () => {
+    setLoading(true);
     try {
-      setLoading(true);
-      const res = await fetch(`${API_BASE}/marketplace/items`, {
+      const { data } = await supabase.auth.getSession();
+      const at = data?.session?.access_token || '';
+      const rt = data?.session?.refresh_token || '';
+      
+      const response = await fetch(`${API_BASE}/marketplace/items`, {
         method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-          'Cookie': `access_token=${at || ''}; refresh_token=${rt || ''}`,
-        },
+        credentials: 'include',
+        headers: { Cookie: `access_token=${at}; refresh_token=${rt}` },
       });
 
-      if (!res.ok) {
-        console.warn('[marketplace.js] Failed to fetch marketplace items:', res.status, res.statusText);
-        setMarketplaceItems([]);
-        return;
-      }
-
-      const json = await res.json();
-      const items = Array.isArray(json?.data) ? json.data : [];
-      
-      if (items.length) {
-        const mappedItems = items.map((item) => ({
-          id: item.marketItemId || item.id,
-          marketItemId: item.marketItemId || item.id,
-          title: item.title || 'Untitled',
-          description: item.description || '',
-          price: item.price || 0,
-          primary_image: item.primary_image || item.images?.[0] || null,
-          images: item.images || [],
-          medium: item.medium || 'Mixed Media',
-          dimensions: item.dimensions || '',
-          listingType: item.listingType || 'buy-now',
-          category: item.category || item.medium?.toLowerCase() || 'all',
-          sellerName: item.seller?.shopName || item.sellerProfiles?.shopName || 'Unknown Shop',
-          seller: item.seller || item.sellerProfiles || {},
-          quantity: item.quantity || 0,
-          is_featured: item.is_featured || false,
-          is_original: item.is_original || false,
-          year_created: item.year_created || new Date().getFullYear(),
-          created_at: item.created_at || new Date().toISOString(),
-        }));
+      if (response.ok) {
+        const result = await response.json();
+        let items = result.data || [];
         
-        setMarketplaceItems(mappedItems);
-      } else {
-        setMarketplaceItems([]);
+        // Apply filters and sorting
+        if (selectedCategory !== 'all') {
+          items = items.filter(item => item.medium?.toLowerCase() === selectedCategory.toLowerCase());
+        }
+        if (listingType !== 'all') {
+          items = items.filter(item => item.listingType === listingType);
+        }
+        
+        // Sort
+        switch (sortBy) {
+          case 'price-low':
+            items.sort((a, b) => a.price - b.price);
+            break;
+          case 'price-high':
+            items.sort((a, b) => b.price - a.price);
+            break;
+          case 'newest':
+            items.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+            break;
+          case 'popular':
+            items.sort((a, b) => (b.views || 0) - (a.views || 0));
+            break;
+        }
+        
+        setMarketplaceItems(items);
       }
-    } catch (e) {
-      console.warn('[marketplace.js] Error fetching marketplace items:', e?.message || e);
-      setMarketplaceItems([]);
+    } catch (error) {
+      console.error('Error fetching marketplace:', error);
     } finally {
       setLoading(false);
     }
-  };
+  }, [selectedCategory, listingType, sortBy]);
 
-  // Fetch cart from backend
-  const fetchCart = async (at, rt) => {
+  // Fetch cart
+  const fetchCart = useCallback(async () => {
+    if (!userData) return; // Don't fetch if no user logged in
+    
     try {
-      const res = await fetch(`${API_BASE}/marketplace/cart`, {
+      const { data } = await supabase.auth.getSession();
+      const at = data?.session?.access_token || '';
+      const rt = data?.session?.refresh_token || '';
+      const userId = data?.session?.user?.id;
+      
+      if (!userId) {
+        console.log('No user ID, skipping cart fetch');
+        return;
+      }
+      
+      const response = await fetch(`${API_BASE}/marketplace/cart`, {
         method: 'GET',
-        headers: {
-          'Content-Type': 'application/json',
-          'Cookie': `access_token=${at || ''}; refresh_token=${rt || ''}`,
+        credentials: 'include',
+        headers: { 
+          Cookie: `access_token=${at}; refresh_token=${rt}`,
+          'Authorization': `Bearer ${at}`,
         },
       });
 
-      if (!res.ok) {
-        console.warn('[marketplace.js] Failed to fetch cart:', res.status);
-        return;
+      if (response.ok) {
+        const result = await response.json();
+        
+        // Ensure we only get items for the current user
+        if (result.data && result.data.items) {
+          const transformedCart = result.data.items.map(item => ({
+            cartItemId: item.cartItemId,
+            quantity: item.quantity,
+            marketItemId: item.marketplace_items?.marketItemId,
+            title: item.marketplace_items?.title || 'Unknown Item',
+            price: item.marketplace_items?.price || 0,
+            primary_image: item.marketplace_items?.images?.[0] || null,
+            sellerName: item.marketplace_items?.sellerProfiles?.shopName || 'Unknown',
+            stock: item.marketplace_items?.quantity || 0,
+          }));
+          setCartItems(transformedCart);
+        } else {
+          setCartItems([]);
+        }
+      } else {
+        console.error('Cart fetch failed:', response.status);
+        setCartItems([]);
       }
-
-      const result = await res.json();
-      if (result.success && result.data?.items) {
-        const transformedCart = result.data.items.map(item => ({
-          cartItemId: item.cartItemId,
-          id: item.marketplace_items?.marketItemId || item.cartItemId,
-          quantity: item.quantity,
-          marketItemId: item.marketplace_items?.marketItemId,
-          title: item.marketplace_items?.title || 'Unknown',
-          artist: item.marketplace_items?.sellerProfiles?.shopName || 'Unknown Shop',
-          price: item.marketplace_items?.price || 0,
-          image: item.marketplace_items?.images?.[0] 
-            ? { uri: item.marketplace_items.images[0] } 
-            : require('../../assets/pic1.jpg'),
-          stock: item.marketplace_items?.quantity || 0,
-        }));
-        setCartItems(transformedCart);
-      }
-    } catch (e) {
-      console.warn('[marketplace.js] Error fetching cart:', e?.message || e);
+    } catch (error) {
+      console.error('Error fetching cart:', error);
+      setCartItems([]);
     }
-  };
-
-  // Initialize and fetch data
-  useEffect(() => {
-    const initAndFetch = async () => {
-      const { data } = await supabase.auth.getSession();
-      const at = data?.session?.access_token || null;
-      const rt = data?.session?.refresh_token || null;
-      setAccessToken(at);
-      setRefreshToken(rt);
-      await fetchMarketplaceItems(at, rt);
-      if (userData) {
-        await fetchCart(at, rt);
-      }
-    };
-
-    initAndFetch();
   }, [userData]);
 
-  // Pull to refresh handler
-  const onRefresh = async () => {
-    setRefreshing(true);
-    try {
-      await fetchMarketplaceItems(accessToken, refreshToken);
-      if (userData) {
-        await fetchCart(accessToken, refreshToken);
-      }
-    } catch (err) {
-      console.error('Refresh error:', err);
-    } finally {
-      setRefreshing(false);
+  // Add to cart
+  const handleAddToCart = async (item, quantityToAdd = 1) => {
+    if (!userData) {
+      Alert.alert('Login Required', 'Please login to add items to cart');
+      return;
     }
-  };
-
-  // Add to cart handler
-  const handleAddToCart = async (item) => {
+    
     try {
-      const res = await fetch(`${API_BASE}/marketplace/cart/add`, {
+      const { data } = await supabase.auth.getSession();
+      const at = data?.session?.access_token || '';
+      const rt = data?.session?.refresh_token || '';
+      const userId = data?.session?.user?.id;
+      
+      if (!userId) {
+        Alert.alert('Error', 'User session expired. Please login again.');
+        return;
+      }
+      
+      const response = await fetch(`${API_BASE}/marketplace/cart/add`, {
         method: 'POST',
+        credentials: 'include',
         headers: {
           'Content-Type': 'application/json',
-          'Cookie': `access_token=${accessToken}; refresh_token=${refreshToken}`,
+          Cookie: `access_token=${at}; refresh_token=${rt}`,
+          'Authorization': `Bearer ${at}`,
         },
         body: JSON.stringify({
           marketplace_item_id: item.marketItemId || item.id,
-          quantity: 1,
-        }),
+          quantity: quantityToAdd
+        })
       });
 
-      const result = await res.json();
-      if (!res.ok) {
-        throw new Error(result.error || 'Failed to add to cart');
-      }
+      const result = await response.json();
 
-      if (result.success) {
-        await fetchCart(accessToken, refreshToken);
+      if (response.ok) {
+        await fetchCart();
         setShowCart(true);
         Alert.alert('Success', 'Item added to cart!');
+      } else {
+        Alert.alert('Error', result.error || 'Failed to add item to cart');
       }
     } catch (error) {
       console.error('Error adding to cart:', error);
-      Alert.alert('Error', error.message || 'Failed to add item to cart');
+      Alert.alert('Error', 'Failed to add item to cart. Please try again.');
     }
   };
 
-  // Update cart quantity
-  const updateQuantity = async (cartItemId, newQuantity) => {
-    if (newQuantity <= 0) {
-      await removeItem(cartItemId);
-    } else {
-      try {
-        const res = await fetch(`${API_BASE}/marketplace/cart/${cartItemId}`, {
-          method: 'PUT',
-          headers: {
-            'Content-Type': 'application/json',
-            'Cookie': `access_token=${accessToken}; refresh_token=${refreshToken}`,
-          },
-          body: JSON.stringify({ quantity: newQuantity }),
-        });
+  // Handle place bid
+  const handlePlaceBid = (item, bidAmount) => {
+    Alert.alert(
+      'Bid Placed',
+      `Your sealed bid of $${bidAmount} has been placed successfully!\n\nYou will be notified when the auction ends.`,
+      [{ text: 'OK' }]
+    );
+  };
 
-        const result = await res.json();
-        if (!res.ok) {
-          throw new Error(result.error || 'Failed to update cart');
-        }
+  useEffect(() => {
+    fetchMarketplaceItems();
+    if (userData) {
+      fetchCart();
+    }
+  }, [fetchMarketplaceItems, fetchCart, userData]);
 
-        if (result.success) {
-          await fetchCart(accessToken, refreshToken);
-        }
-      } catch (error) {
-        console.error('Error updating quantity:', error);
-        Alert.alert('Error', error.message || 'Failed to update quantity');
+  useFocusEffect(
+    useCallback(() => {
+      fetchMarketplaceItems();
+      if (userData) {
+        fetchCart();
       }
-    }
-  };
-
-  // Remove from cart
-  const removeItem = async (cartItemId) => {
-    try {
-      const res = await fetch(`${API_BASE}/marketplace/cart/${cartItemId}`, {
-        method: 'DELETE',
-        headers: {
-          'Cookie': `access_token=${accessToken}; refresh_token=${refreshToken}`,
-        },
-      });
-
-      const result = await res.json();
-      if (!res.ok) {
-        throw new Error(result.error || 'Failed to remove item');
-      }
-
-      if (result.success) {
-        await fetchCart(accessToken, refreshToken);
-        Alert.alert('Success', 'Item removed from cart');
-      }
-    } catch (error) {
-      console.error('Error removing item:', error);
-      Alert.alert('Error', error.message || 'Failed to remove item');
-    }
-  };
-
-  // Apply filters and sorting to marketplace items
-  const getFilteredAndSortedItems = () => {
-    let filtered = [...marketplaceItems];
-
-    // Filter by listing type
-    if (listingType !== 'all') {
-      filtered = filtered.filter(item => item.listingType === listingType);
-    }
-
-    // Filter by category
-    if (selectedCategory !== 'all') {
-      filtered = filtered.filter(item => 
-        item.category === selectedCategory || 
-        item.medium?.toLowerCase() === selectedCategory.toLowerCase()
-      );
-    }
-
-    // Filter by price range
-    if (priceRange.min !== '' || priceRange.max !== '') {
-      const min = priceRange.min === '' ? 0 : Number(priceRange.min);
-      const max = priceRange.max === '' ? Infinity : Number(priceRange.max);
-      filtered = filtered.filter(item => item.price >= min && item.price <= max);
-    }
-
-    // Filter by artwork type
-    if (artworkType.original) {
-      filtered = filtered.filter(item => item.is_original);
-    }
-
-    // Sort items
-    switch (sortBy) {
-      case 'price-low':
-        filtered.sort((a, b) => a.price - b.price);
-        break;
-      case 'price-high':
-        filtered.sort((a, b) => b.price - a.price);
-        break;
-      case 'newest':
-        filtered.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
-        break;
-      case 'popular':
-        filtered.sort((a, b) => (b.views || 0) - (a.views || 0));
-        break;
-    }
-
-    return filtered;
-  };
-
-  const filteredItems = getFilteredAndSortedItems();
+    }, [fetchMarketplaceItems, fetchCart, userData])
+  );
 
   const categories = [
     { id: 'all', name: 'All Categories' },
@@ -330,7 +304,7 @@ const MarketplaceScreen = () => {
       {/* Reusable Header */}
       <Header title="Marketplace" showSearch={false} />
 
-      {/* Search Bar + Filter Button */}
+      {/* Search Bar + Filter Button + Seller Dashboard */}
       <View style={styles.searchToolbar}>
         <View style={styles.searchContainer}>
           <Ionicons name="search-outline" size={20} color="#999" style={styles.searchIcon} />
@@ -348,102 +322,45 @@ const MarketplaceScreen = () => {
         </TouchableOpacity>
       </View>
 
-      {/* Scrollable Content */}
-      <ScrollView 
-        showsVerticalScrollIndicator={false}
-        refreshControl={
-          <RefreshControl
-            refreshing={refreshing}
-            onRefresh={onRefresh}
-            colors={['#A68C7B']}
-            tintColor="#A68C7B"
-          />
-        }
-      >
-        {/* Section: Join Auctions */}
-        <Text style={styles.sectionTitle}>Join Auctions</Text>
-        <View style={styles.cardGrid}>
+      {/* Seller Dashboard Button */}
+      {userData?.isSeller && (
+        <View style={styles.sellerDashboardContainer}>
           <TouchableOpacity
-            style={styles.card}
-            onPress={() => router.push('/auction')}
+            style={styles.sellerDashboardBtn}
+            onPress={() => router.push('/marketplace/seller-dashboard')}
           >
-            <Image source={require('../../assets/pic1.jpg')} style={styles.cardImage} />
-            <Text style={styles.cardTitle}>"Golden Silence"</Text>
-            <Text style={styles.cardAuthor}>by Elara Mendez</Text>
-            <Text style={styles.cardPrice}>M9000</Text>
+            <Ionicons name="storefront" size={20} color="#fff" />
+            <Text style={styles.sellerDashboardText}>Seller Dashboard</Text>
+            <Ionicons name="chevron-forward" size={20} color="#fff" />
           </TouchableOpacity>
-          <View style={styles.card}>
-            <Image source={require('../../assets/pic1.jpg')} style={styles.cardImage} />
-            <Text style={styles.cardTitle}>"Sakura Haze"</Text>
-            <Text style={styles.cardAuthor}>by Owenn Bellamy</Text>
-            <Text style={styles.cardPrice}>M1000</Text>
-          </View>
-          <View style={styles.card}>
-            <Image source={require('../../assets/pic1.jpg')} style={styles.cardImage} />
-            <Text style={styles.cardTitle}>"The Ewam"</Text>
-            <Text style={styles.cardAuthor}>by Wasap Nah</Text>
-            <Text style={styles.cardPrice}>M23000</Text>
-          </View>
         </View>
+      )}
 
-        {/* Section: Marketplace Items */}
-        <Text style={styles.sectionTitle}>Marketplace Items</Text>
-        {loading && marketplaceItems.length === 0 ? (
+      {/* Scrollable Content - Dynamic Marketplace Grid */}
+      <ScrollView showsVerticalScrollIndicator={false}>
+        {loading ? (
           <View style={styles.loadingContainer}>
             <ActivityIndicator size="large" color="#A68C7B" />
-            <Text style={styles.loadingText}>Loading items...</Text>
+            <Text style={styles.loadingText}>Loading artworks...</Text>
           </View>
-        ) : filteredItems.length === 0 ? (
+        ) : marketplaceItems.length === 0 ? (
           <View style={styles.emptyContainer}>
-            <Ionicons name="cart-outline" size={64} color="#ccc" />
-            <Text style={styles.emptyTitle}>No items found</Text>
-            <Text style={styles.emptyText}>Try adjusting your filters</Text>
+            <Ionicons name="images-outline" size={80} color="#ccc" />
+            <Text style={styles.emptyTitle}>No Artworks Found</Text>
+            <Text style={styles.emptySubtext}>Try adjusting your filters or check back later</Text>
           </View>
         ) : (
           <View style={styles.cardGrid}>
-            {filteredItems.map((item) => (
-              <TouchableOpacity
-                key={item.id}
-                style={styles.card}
+            {marketplaceItems.map((item) => (
+              <MarketplaceCard
+                key={item.marketItemId || item.id}
+                item={item}
                 onPress={() => {
-                  // Navigate to product detail with item ID
-                  router.push({
-                    pathname: '/(drawer)/viewNormalMarket',
-                    params: {
-                      id: item.marketItemId || item.id,
-                      marketItemId: item.marketItemId || item.id,
-                    },
-                  });
+                  setSelectedProduct(item);
+                  setShowProductModal(true);
                 }}
-              >
-                <Image 
-                  source={
-                    item.primary_image 
-                      ? { uri: item.primary_image } 
-                      : require('../../assets/pic1.jpg')
-                  } 
-                  style={styles.cardImage} 
-                />
-                {item.listingType === 'auction' && (
-                  <View style={styles.auctionBadge}>
-                    <Ionicons name="trophy" size={12} color="#fff" />
-                    <Text style={styles.auctionBadgeText}>Auction</Text>
-                  </View>
-                )}
-                <Text style={styles.cardTitle} numberOfLines={1}>"{item.title}"</Text>
-                <Text style={styles.cardAuthor} numberOfLines={1}>by {item.sellerName}</Text>
-                <Text style={styles.cardPrice}>M{item.price.toLocaleString()}</Text>
-                <TouchableOpacity 
-                  style={styles.addToCartBtn}
-                  onPress={(e) => {
-                    e.stopPropagation();
-                    handleAddToCart(item);
-                  }}
-                >
-                  <Ionicons name="cart-outline" size={16} color="#fff" />
-                  <Text style={styles.addToCartText}>Add to Cart</Text>
-                </TouchableOpacity>
-              </TouchableOpacity>
+                onAddToCart={handleAddToCart}
+              />
             ))}
           </View>
         )}
@@ -700,18 +617,25 @@ const MarketplaceScreen = () => {
                 </View>
               ) : (
                 cartItems.map((item) => (
-                  <View key={item.id} style={styles.cartItem}>
-                    <Image source={item.image} style={styles.cartItemImage} />
+                  <View key={item.cartItemId} style={styles.cartItem}>
+                    <Image 
+                      source={
+                        item.primary_image 
+                          ? { uri: item.primary_image }
+                          : require('../../assets/pic1.jpg')
+                      } 
+                      style={styles.cartItemImage} 
+                    />
                     <View style={styles.cartItemDetails}>
                       <Text style={styles.cartItemTitle}>{item.title}</Text>
-                      <Text style={styles.cartItemArtist}>by {item.artist}</Text>
-                      <Text style={styles.cartItemPrice}>M{item.price.toLocaleString()}</Text>
-
+                      <Text style={styles.cartItemArtist}>by {item.sellerName}</Text>
+                      <Text style={styles.cartItemPrice}>${item.price.toFixed(2)}</Text>
+                      
                       {/* Quantity Controls */}
                       <View style={styles.quantityControls}>
                         <TouchableOpacity
                           style={styles.quantityButton}
-                          onPress={() => updateQuantity(item.cartItemId, item.quantity - 1)}
+                          onPress={() => updateQuantity(item.cartItemId, -1)}
                         >
                           <Ionicons name="remove" size={18} color="#A68C7B" />
                         </TouchableOpacity>
@@ -725,7 +649,7 @@ const MarketplaceScreen = () => {
                         </TouchableOpacity>
                       </View>
                     </View>
-
+                    
                     {/* Remove Button */}
                     <TouchableOpacity
                       style={styles.removeButton}
@@ -744,27 +668,34 @@ const MarketplaceScreen = () => {
                 <View style={styles.cartSummary}>
                   <View style={styles.summaryRow}>
                     <Text style={styles.summaryLabel}>Subtotal:</Text>
-                    <Text style={styles.summaryValue}>M{getCartTotal().toLocaleString()}</Text>
+                    <Text style={styles.summaryValue}>${getCartTotal().toFixed(2)}</Text>
                   </View>
                   <View style={styles.summaryRow}>
                     <Text style={styles.summaryLabel}>Shipping:</Text>
-                    <Text style={styles.summaryValue}>M0</Text>
+                    <Text style={styles.summaryValue}>$0.00</Text>
                   </View>
                   <View style={[styles.summaryRow, styles.totalRow]}>
                     <Text style={styles.totalLabel}>Total:</Text>
-                    <Text style={styles.totalValue}>M{getCartTotal().toLocaleString()}</Text>
+                    <Text style={styles.totalValue}>${getCartTotal().toFixed(2)}</Text>
                   </View>
                 </View>
-
+                
                 <TouchableOpacity 
                   style={styles.checkoutButton}
                   onPress={() => {
                     setShowCart(false);
-                    router.push('/(drawer)/checkout');
+                    router.push('/orderSummary');
                   }}
                 >
                   <Text style={styles.checkoutButtonText}>Proceed to Checkout</Text>
                   <Ionicons name="arrow-forward" size={20} color="#fff" />
+                </TouchableOpacity>
+                
+                <TouchableOpacity 
+                  style={styles.continueShoppingButton}
+                  onPress={() => setShowCart(false)}
+                >
+                  <Text style={styles.continueShoppingText}>Continue Shopping</Text>
                 </TouchableOpacity>
               </View>
             )}
@@ -784,7 +715,137 @@ const MarketplaceScreen = () => {
           </View>
         )}
       </TouchableOpacity>
+
+      {/* Product Detail Modal */}
+      <ProductDetailModal
+        visible={showProductModal}
+        onClose={() => setShowProductModal(false)}
+        item={selectedProduct}
+        onAddToCart={handleAddToCart}
+        onPlaceBid={handlePlaceBid}
+      />
+        <AndroidFooterSpacer backgroundColor="#fff" />
     </SafeAreaView>
+  );
+};
+
+// Marketplace Card Component
+const MarketplaceCard = ({ item, onPress, onAddToCart }) => {
+  const getTimeRemaining = (endTime) => {
+    if (!endTime) return '';
+    const now = new Date();
+    const end = new Date(endTime);
+    const diff = end - now;
+    
+    if (diff <= 0) return 'Ended';
+    
+    const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+    const hours = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+    const minutes = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+    
+    if (days > 0) return `${days}d ${hours}h left`;
+    if (hours > 0) return `${hours}h ${minutes}m left`;
+    return `${minutes}m left`;
+  };
+
+  const isAuction = item.listingType === 'auction';
+  const salePercentage = item.originalPrice ? Math.round((1 - item.price / item.originalPrice) * 100) : 0;
+
+  return (
+    <TouchableOpacity style={styles.card} onPress={onPress} activeOpacity={0.9}>
+      {/* Image Container */}
+      <View style={styles.cardImageContainer}>
+        <Image
+          source={
+            item.primary_image
+              ? { uri: item.primary_image }
+              : item.images?.[0]
+              ? { uri: item.images[0] }
+              : require('../../assets/pic1.jpg')
+          }
+          style={styles.cardImage}
+        />
+        
+        {/* Badges */}
+        <View style={styles.badgeRow}>
+          {item.is_featured && (
+            <View style={[styles.cardBadge, styles.featuredBadge]}>
+              <Ionicons name="star" size={12} color="#FFD700" />
+              <Text style={styles.badgeText}>Featured</Text>
+            </View>
+          )}
+          {salePercentage > 0 && !isAuction && (
+            <View style={[styles.cardBadge, styles.saleBadge]}>
+              <Text style={styles.badgeText}>{salePercentage}% OFF</Text>
+            </View>
+          )}
+          {isAuction && (
+            <View style={[styles.cardBadge, styles.auctionBadge]}>
+              <Ionicons name="trophy" size={12} color="#fff" />
+              <Text style={[styles.badgeText, { color: '#fff' }]}>Auction</Text>
+            </View>
+          )}
+        </View>
+      </View>
+
+      {/* Card Content */}
+      <View style={styles.cardContent}>
+        <View style={styles.cardMeta}>
+          <Text style={styles.cardCategory}>{item.medium || 'Art'}</Text>
+          <Text style={styles.cardYear}>{item.year_created || new Date().getFullYear()}</Text>
+        </View>
+        
+        <Text style={styles.cardTitle} numberOfLines={2}>{item.title}</Text>
+        <Text style={styles.cardAuthor} numberOfLines={1}>
+          by {item.seller?.shopName || 'Unknown Artist'}
+        </Text>
+        
+        <View style={styles.cardDetails}>
+          <Text style={styles.cardSize} numberOfLines={1}>
+            {item.dimensions || 'Size not specified'}
+          </Text>
+          {item.is_original && (
+            <View style={styles.originalTag}>
+              <Text style={styles.originalTagText}>Original</Text>
+            </View>
+          )}
+        </View>
+
+        <View style={styles.cardFooter}>
+          {isAuction ? (
+            <View style={styles.auctionInfo}>
+              <Text style={styles.bidLabel}>Current Bid</Text>
+              <Text style={styles.cardPrice}>${item.currentBid || item.startingPrice || item.price}</Text>
+              <Text style={styles.timeLeft}>{getTimeRemaining(item.endTime)}</Text>
+            </View>
+          ) : (
+            <View style={styles.priceInfo}>
+              {item.originalPrice && (
+                <Text style={styles.originalPrice}>${item.originalPrice}</Text>
+              )}
+              <Text style={styles.cardPrice}>${item.price}</Text>
+            </View>
+          )}
+          
+          <TouchableOpacity
+            style={[styles.addToCartBtn, isAuction && styles.bidBtn]}
+            onPress={(e) => {
+              e.stopPropagation();
+              isAuction ? onPress() : onAddToCart(item);
+            }}
+          >
+            <Ionicons 
+              name={isAuction ? 'trophy' : 'cart'} 
+              size={16} 
+              color="#fff" 
+            />
+            <Text style={styles.addToCartText}>
+              {isAuction ? 'Bid' : 'Add'}
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    </TouchableOpacity>
   );
 };
 
@@ -834,29 +895,197 @@ const styles = StyleSheet.create({
     marginTop: 10,
     marginBottom: 5,
   },
+  // Loading & Empty States
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: 60,
+  },
+  loadingText: {
+    marginTop: 16,
+    fontSize: 16,
+    color: '#666',
+  },
+  emptyContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: 60,
+    paddingHorizontal: 30,
+  },
+  emptyTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#333',
+    marginTop: 20,
+    marginBottom: 8,
+  },
+  emptySubtext: {
+    fontSize: 14,
+    color: '#999',
+    textAlign: 'center',
+  },
+  // Card Grid
   cardGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     justifyContent: 'space-between',
-    marginHorizontal: 15,
-    marginBottom: 15,
+    paddingHorizontal: 15,
+    paddingTop: 15,
   },
   card: {
     width: '48%',
     backgroundColor: '#fff',
-    borderRadius: 10,
-    padding: 8,
+    borderRadius: 12,
     marginBottom: 15,
     shadowColor: '#000',
     shadowOpacity: 0.1,
     shadowOffset: { width: 0, height: 2 },
     shadowRadius: 4,
-    elevation: 2,
+    elevation: 3,
+    overflow: 'hidden',
   },
-  cardImage: { width: '100%', height: 100, borderRadius: 8, marginBottom: 8 },
-  cardTitle: { fontSize: 14, fontWeight: 'bold' },
-  cardAuthor: { fontSize: 12, color: '#666' },
-  cardPrice: { fontSize: 14, fontWeight: 'bold', color: 'red', marginTop: 4 },
+  cardImageContainer: {
+    position: 'relative',
+    width: '100%',
+    height: 150,
+  },
+  cardImage: { 
+    width: '100%', 
+    height: '100%',
+    backgroundColor: '#f0f0f0',
+  },
+  badgeRow: {
+    position: 'absolute',
+    top: 8,
+    left: 8,
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+  },
+  cardBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 12,
+    gap: 4,
+  },
+  featuredBadge: {
+    backgroundColor: 'rgba(255, 255, 255, 0.95)',
+  },
+  saleBadge: {
+    backgroundColor: 'rgba(255, 0, 0, 0.9)',
+  },
+  auctionBadge: {
+    backgroundColor: 'rgba(166, 140, 123, 0.95)',
+  },
+  badgeText: {
+    fontSize: 10,
+    fontWeight: 'bold',
+    color: '#333',
+  },
+  cardContent: {
+    padding: 12,
+  },
+  cardMeta: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: 6,
+  },
+  cardCategory: {
+    fontSize: 11,
+    color: '#A68C7B',
+    fontWeight: '600',
+  },
+  cardYear: {
+    fontSize: 11,
+    color: '#999',
+  },
+  cardTitle: { 
+    fontSize: 14, 
+    fontWeight: 'bold',
+    color: '#333',
+    marginBottom: 4,
+  },
+  cardAuthor: { 
+    fontSize: 12, 
+    color: '#666',
+    marginBottom: 6,
+  },
+  cardDetails: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 10,
+  },
+  cardSize: {
+    fontSize: 11,
+    color: '#999',
+    flex: 1,
+  },
+  originalTag: {
+    backgroundColor: '#E8F5E9',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  originalTagText: {
+    fontSize: 10,
+    color: '#2E7D32',
+    fontWeight: '600',
+  },
+  cardFooter: {
+    flexDirection: 'row',
+    alignItems: 'flex-end',
+    justifyContent: 'space-between',
+  },
+  auctionInfo: {
+    flex: 1,
+  },
+  bidLabel: {
+    fontSize: 10,
+    color: '#666',
+    marginBottom: 2,
+  },
+  cardPrice: { 
+    fontSize: 16, 
+    fontWeight: 'bold', 
+    color: '#A68C7B',
+  },
+  timeLeft: {
+    fontSize: 11,
+    color: '#FF6B6B',
+    fontWeight: '600',
+    marginTop: 2,
+  },
+  priceInfo: {
+    flex: 1,
+  },
+  originalPrice: {
+    fontSize: 12,
+    color: '#999',
+    textDecorationLine: 'line-through',
+    marginBottom: 2,
+  },
+  addToCartBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#A68C7B',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    gap: 4,
+  },
+  bidBtn: {
+    backgroundColor: '#8B7355',
+  },
+  addToCartText: {
+    color: '#fff',
+    fontSize: 12,
+    fontWeight: 'bold',
+  },
   
   // Filter Modal Styles
   modalOverlay: {
@@ -1205,12 +1434,27 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 4 },
     shadowRadius: 8,
     elevation: 4,
+    marginBottom: 10,
   },
   checkoutButtonText: {
     color: '#fff',
     fontSize: 16,
     fontWeight: 'bold',
     marginRight: 8,
+  },
+  continueShoppingButton: {
+    backgroundColor: '#fff',
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#A68C7B',
+  },
+  continueShoppingText: {
+    color: '#A68C7B',
+    fontSize: 16,
+    fontWeight: 'bold',
   },
 
   // Dropdown Styles
@@ -1255,77 +1499,32 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   dropdownOptionTextActive: {
+    fontSize: 14,
     color: '#A68C7B',
     fontWeight: '600',
   },
-
-  // Loading and Empty States
-  loadingContainer: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 40,
-    marginHorizontal: 15,
+  // Seller Dashboard
+  sellerDashboardContainer: {
+    paddingHorizontal: 15,
+    paddingVertical: 10,
+    backgroundColor: '#fff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#e0e0e0',
   },
-  loadingText: {
-    marginTop: 12,
-    fontSize: 14,
-    color: '#666',
-  },
-  emptyContainer: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 40,
-    marginHorizontal: 15,
-  },
-  emptyTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: '#333',
-    marginTop: 16,
-  },
-  emptyText: {
-    fontSize: 14,
-    color: '#999',
-    marginTop: 8,
-  },
-
-  // Auction Badge
-  auctionBadge: {
-    position: 'absolute',
-    top: 8,
-    right: 8,
-    backgroundColor: '#D32F2F',
+  sellerDashboardBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 12,
-    gap: 4,
-  },
-  auctionBadgeText: {
-    color: '#fff',
-    fontSize: 10,
-    fontWeight: 'bold',
-  },
-
-  // Add to Cart Button
-  addToCartBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
     backgroundColor: '#A68C7B',
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 8,
-    marginTop: 8,
-    gap: 6,
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+    gap: 8,
   },
-  addToCartText: {
+  sellerDashboardText: {
+    flex: 1,
     color: '#fff',
-    fontSize: 12,
-    fontWeight: 'bold',
+    fontSize: 15,
+    fontWeight: '600',
   },
 });
 
