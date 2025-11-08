@@ -1,0 +1,648 @@
+import React, { useState, useEffect } from 'react';
+import { StyleSheet, View, Text, SafeAreaView, Image, TouchableOpacity, ScrollView, BackHandler, ActivityIndicator, Alert, TextInput } from 'react-native';
+import { Ionicons } from '@expo/vector-icons';
+import Header from '../components/Header';
+import { useFocusEffect, useRouter, useLocalSearchParams } from 'expo-router';
+import { supabase } from '../../supabase/supabaseClient';
+
+const ViewNormalMarketScreen = () => {
+  const router = useRouter();
+  const params = useLocalSearchParams();
+  
+  // API configuration - match marketplace.js pattern
+  const API_BASE = "http://192.168.18.22:3000/api";
+  
+  // State management
+  const [product, setProduct] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [accessToken, setAccessToken] = useState(null);
+  const [refreshToken, setRefreshToken] = useState(null);
+  const [activeImageIndex, setActiveImageIndex] = useState(0);
+  const [quantity, setQuantity] = useState(1);
+
+  // Fetch product details from backend
+  const fetchProductDetails = async (at, rt, itemId) => {
+    try {
+      setLoading(true);
+      const res = await fetch(`${API_BASE}/marketplace/items/${itemId}`, {
+        method: 'GET',
+        headers: {
+          'Content-Type': 'application/json',
+          'Cookie': `access_token=${at || ''}; refresh_token=${rt || ''}`,
+        },
+      });
+
+      if (!res.ok) {
+        console.warn('[viewNormalMarket.js] Failed to fetch product:', res.status);
+        return;
+      }
+
+      const json = await res.json();
+      const item = json?.data;
+      
+      if (item) {
+        setProduct({
+          id: item.marketItemId || item.id,
+          marketItemId: item.marketItemId || item.id,
+          title: item.title || 'Untitled',
+          description: item.description || '',
+          price: item.price || 0,
+          primary_image: item.primary_image || item.images?.[0] || null,
+          images: item.images || [],
+          medium: item.medium || 'Mixed Media',
+          dimensions: item.dimensions || 'Size not specified',
+          listingType: item.listingType || 'buy-now',
+          category: item.category || item.medium?.toLowerCase() || 'all',
+          sellerName: item.seller?.shopName || item.sellerProfiles?.shopName || 'Unknown Shop',
+          seller: item.seller || item.sellerProfiles || {},
+          quantity: item.quantity || 0,
+          is_featured: item.is_featured || false,
+          is_original: item.is_original || false,
+          year_created: item.year_created || new Date().getFullYear(),
+          created_at: item.created_at || new Date().toISOString(),
+          status: item.status || 'Available for purchase',
+          shipping: item.shipping || 'Ships within 7–10 business days',
+          localDelivery: item.localDelivery || 'Local delivery available',
+        });
+      }
+    } catch (e) {
+      console.warn('[viewNormalMarket.js] Error fetching product:', e?.message || e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Initialize and fetch data
+  useEffect(() => {
+    const initAndFetch = async () => {
+      const { data } = await supabase.auth.getSession();
+      const at = data?.session?.access_token || null;
+      const rt = data?.session?.refresh_token || null;
+      setAccessToken(at);
+      setRefreshToken(rt);
+      
+      // Get item ID from params or use default
+      const itemId = params?.id || params?.marketItemId || '1';
+      await fetchProductDetails(at, rt, itemId);
+    };
+
+    initAndFetch();
+  }, [params?.id, params?.marketItemId]);
+
+  // Add to cart handler
+  const handleAddToCart = async () => {
+    if (!product) return;
+    
+    try {
+      const res = await fetch(`${API_BASE}/marketplace/cart/add`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Cookie': `access_token=${accessToken}; refresh_token=${refreshToken}`,
+        },
+        body: JSON.stringify({
+          marketplace_item_id: product.marketItemId || product.id,
+          quantity: quantity,
+        }),
+      });
+
+      const result = await res.json();
+      if (!res.ok) {
+        throw new Error(result.error || 'Failed to add to cart');
+      }
+
+      if (result.success) {
+        Alert.alert('Success', 'Item added to cart!', [
+          { text: 'Continue Shopping', style: 'cancel' },
+          { text: 'View Cart', onPress: () => router.push('/(drawer)/marketplace') }
+        ]);
+      }
+    } catch (error) {
+      console.error('Error adding to cart:', error);
+      Alert.alert('Error', error.message || 'Failed to add item to cart');
+    }
+  };
+
+  // Buy now handler
+  const handleBuyNow = () => {
+    Alert.alert(
+      'Buy Now',
+      `Purchase ${quantity} × ${product?.title || 'this item'}?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        { text: 'Proceed', onPress: () => Alert.alert('Checkout', 'Checkout feature coming soon!') }
+      ]
+    );
+  };
+
+  // Ensure Android hardware back navigates to Marketplace screen
+  useFocusEffect(
+    React.useCallback(() => {
+      const onBackPress = () => {
+        router.replace('/(drawer)/marketplace');
+        return true; // consume back press
+      };
+      const sub = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+      return () => sub.remove();
+    }, [router])
+  );
+
+  // Loading state
+  if (loading) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <Header title="Product Details" showSearch={false} />
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color="#A68C7B" />
+          <Text style={styles.loadingText}>Loading product details...</Text>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  // Error state - no product found
+  if (!product) {
+    return (
+      <SafeAreaView style={styles.container}>
+        <Header title="Product Details" showSearch={false} />
+        <View style={styles.errorContainer}>
+          <Ionicons name="alert-circle-outline" size={64} color="#ccc" />
+          <Text style={styles.errorTitle}>Product not found</Text>
+          <Text style={styles.errorText}>This item may have been removed or is no longer available.</Text>
+          <TouchableOpacity 
+            style={styles.backButton}
+            onPress={() => router.replace('/(drawer)/marketplace')}
+          >
+            <Text style={styles.backButtonText}>Back to Marketplace</Text>
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    );
+  }
+
+  return (
+    <SafeAreaView style={styles.container}>
+      {/* Reusable Header */}
+      <Header title="Product Details" showSearch={false} />
+
+      <ScrollView showsVerticalScrollIndicator={false}>
+        {/* Image Gallery */}
+        <View style={styles.imageContainer}>
+          <Image
+            source={
+              product.images?.[activeImageIndex] || product.primary_image
+                ? { uri: product.images?.[activeImageIndex] || product.primary_image }
+                : require('../../assets/pic1.jpg')
+            }
+            style={styles.artworkImage}
+          />
+          
+          {/* Image thumbnails if multiple images */}
+          {product.images && product.images.length > 1 && (
+            <ScrollView 
+              horizontal 
+              showsHorizontalScrollIndicator={false}
+              style={styles.thumbnailContainer}
+            >
+              {product.images.map((img, index) => (
+                <TouchableOpacity
+                  key={index}
+                  onPress={() => setActiveImageIndex(index)}
+                  style={[
+                    styles.thumbnail,
+                    activeImageIndex === index && styles.thumbnailActive
+                  ]}
+                >
+                  <Image
+                    source={{ uri: img }}
+                    style={styles.thumbnailImage}
+                  />
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          )}
+        </View>
+
+        {/* Title and Author */}
+        <View style={styles.titleContainer}>
+          <Text style={styles.artworkTitle}>"{product.title}"</Text>
+          <Text style={styles.artistName}>by {product.sellerName}</Text>
+          {product.listingType === 'auction' && (
+            <View style={styles.auctionBadge}>
+              <Ionicons name="trophy" size={16} color="#D32F2F" />
+              <Text style={styles.auctionText}>Auction Item</Text>
+            </View>
+          )}
+        </View>
+
+        {/* Price and Quantity Section */}
+        <View style={styles.priceSection}>
+          <View style={styles.priceRow}>
+            <Text style={styles.priceLabel}>Price:</Text>
+            <Text style={styles.priceText}>M{product.price.toLocaleString()}</Text>
+          </View>
+          
+          <View style={styles.quantityRow}>
+            <Text style={styles.quantityLabel}>Quantity:</Text>
+            <View style={styles.quantityControls}>
+              <TouchableOpacity
+                style={styles.quantityButton}
+                onPress={() => setQuantity(Math.max(1, quantity - 1))}
+              >
+                <Ionicons name="remove" size={18} color="#A68C7B" />
+              </TouchableOpacity>
+              <Text style={styles.quantityText}>{quantity}</Text>
+              <TouchableOpacity
+                style={styles.quantityButton}
+                onPress={() => setQuantity(Math.min(product.quantity || 99, quantity + 1))}
+                disabled={quantity >= (product.quantity || 99)}
+              >
+                <Ionicons name="add" size={18} color="#A68C7B" />
+              </TouchableOpacity>
+            </View>
+          </View>
+          
+          {product.quantity !== undefined && (
+            <Text style={styles.stockText}>
+              {product.quantity > 0 ? `${product.quantity} in stock` : 'Out of stock'}
+            </Text>
+          )}
+        </View>
+
+        {/* Description */}
+        <View style={styles.descriptionBox}>
+          <View style={styles.sectionTitleRow}>
+            <Ionicons name="document-text-outline" size={20} color="#A68C7B" />
+            <Text style={styles.descriptionTitle}>Description:</Text>
+          </View>
+          <Text style={styles.descriptionText}>
+            {product.description || 'No description available for this item.'}
+          </Text>
+        </View>
+
+        {/* Details */}
+        <View style={styles.detailsBox}>
+          <View style={styles.sectionTitleRow}>
+            <Ionicons name="information-circle-outline" size={20} color="#A68C7B" />
+            <Text style={styles.detailsTitle}>Details:</Text>
+          </View>
+          <View style={styles.detailRow}>
+            <Ionicons name="color-palette-outline" size={16} color="#666" />
+            <Text style={styles.detailsText}>Medium: {product.medium}</Text>
+          </View>
+          <View style={styles.detailRow}>
+            <Ionicons name="resize-outline" size={16} color="#666" />
+            <Text style={styles.detailsText}>Size: {product.dimensions}</Text>
+          </View>
+          <View style={styles.detailRow}>
+            <Ionicons name="calendar-outline" size={16} color="#666" />
+            <Text style={styles.detailsText}>Year: {product.year_created}</Text>
+          </View>
+          <View style={styles.detailRow}>
+            <Ionicons name="checkmark-circle-outline" size={16} color="#666" />
+            <Text style={styles.detailsText}>Status: {product.status}</Text>
+          </View>
+          {product.is_original && (
+            <View style={styles.detailRow}>
+              <Ionicons name="star" size={16} color="#FFD700" />
+              <Text style={styles.detailsText}>Original Artwork</Text>
+            </View>
+          )}
+        </View>
+
+        {/* Shipping Info */}
+        <View style={styles.shippingBox}>
+          <View style={styles.sectionTitleRow}>
+            <Ionicons name="car-outline" size={20} color="#A68C7B" />
+            <Text style={styles.shippingTitle}>Shipping & Delivery:</Text>
+          </View>
+          <View style={styles.detailRow}>
+            <Ionicons name="time-outline" size={16} color="#666" />
+            <Text style={styles.shippingText}>{product.shipping}</Text>
+          </View>
+          <View style={styles.detailRow}>
+            <Ionicons name="cube-outline" size={16} color="#666" />
+            <Text style={styles.shippingText}>{product.localDelivery}</Text>
+          </View>
+        </View>
+
+        {/* Action Buttons */}
+        <View style={styles.actionButtons}>
+          <TouchableOpacity 
+            style={styles.addToCartButton}
+            onPress={handleAddToCart}
+            disabled={product.quantity === 0}
+          >
+            <Ionicons name="cart-outline" size={20} color="#fff" />
+            <Text style={styles.addToCartText}>Add to Cart</Text>
+          </TouchableOpacity>
+          
+          <TouchableOpacity 
+            style={styles.buyNowButton}
+            onPress={handleBuyNow}
+            disabled={product.quantity === 0}
+          >
+            <Text style={styles.buyNowText}>Buy Now</Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* Bottom spacing for Android navigation bar */}
+        <View style={{ height: 100 }} />
+      </ScrollView>
+    </SafeAreaView>
+  );
+};
+
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#F5F8FA' },
+  
+  // Loading and Error States
+  loadingContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingVertical: 60,
+  },
+  loadingText: {
+    marginTop: 12,
+    fontSize: 14,
+    color: '#666',
+  },
+  errorContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 30,
+    paddingVertical: 60,
+  },
+  errorTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#333',
+    marginTop: 16,
+    marginBottom: 8,
+  },
+  errorText: {
+    fontSize: 14,
+    color: '#999',
+    textAlign: 'center',
+    marginBottom: 20,
+  },
+  backButton: {
+    backgroundColor: '#A68C7B',
+    paddingVertical: 12,
+    paddingHorizontal: 24,
+    borderRadius: 8,
+  },
+  backButtonText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  
+  // Image Gallery
+  imageContainer: { 
+    marginTop: 10, 
+    marginHorizontal: 15, 
+    borderRadius: 10, 
+    overflow: 'hidden',
+    backgroundColor: '#fff',
+  },
+  artworkImage: { 
+    width: '100%', 
+    height: 300, 
+    resizeMode: 'cover', 
+    borderRadius: 10,
+  },
+  thumbnailContainer: {
+    marginTop: 10,
+    paddingHorizontal: 5,
+    paddingBottom: 10,
+  },
+  thumbnail: {
+    width: 60,
+    height: 60,
+    marginHorizontal: 5,
+    borderRadius: 8,
+    borderWidth: 2,
+    borderColor: '#e0e0e0',
+    overflow: 'hidden',
+  },
+  thumbnailActive: {
+    borderColor: '#A68C7B',
+    borderWidth: 3,
+  },
+  thumbnailImage: {
+    width: '100%',
+    height: '100%',
+    resizeMode: 'cover',
+  },
+  
+  // Title Section
+  titleContainer: { 
+    marginTop: 15, 
+    marginHorizontal: 15, 
+    paddingVertical: 15, 
+    paddingHorizontal: 15,
+    backgroundColor: 'white', 
+    borderRadius: 10,
+  },
+  artworkTitle: { 
+    fontSize: 22, 
+    fontWeight: 'bold', 
+    color: '#333',
+    marginBottom: 8,
+  },
+  artistName: {
+    fontSize: 16,
+    color: '#666',
+    marginBottom: 8,
+  },
+  auctionBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 8,
+    gap: 6,
+  },
+  auctionText: {
+    fontSize: 14,
+    color: '#D32F2F',
+    fontWeight: '600',
+  },
+  
+  // Price and Quantity Section
+  priceSection: {
+    backgroundColor: 'white',
+    marginHorizontal: 15,
+    marginTop: 15,
+    borderRadius: 10,
+    padding: 15,
+  },
+  priceRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 15,
+  },
+  priceLabel: {
+    fontSize: 16,
+    color: '#666',
+    fontWeight: '600',
+  },
+  priceText: { 
+    fontSize: 24, 
+    fontWeight: 'bold', 
+    color: '#D32F2F',
+  },
+  quantityRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  quantityLabel: {
+    fontSize: 16,
+    color: '#666',
+    fontWeight: '600',
+  },
+  quantityControls: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 15,
+  },
+  quantityButton: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: '#A68C7B',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  quantityText: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#333',
+    minWidth: 30,
+    textAlign: 'center',
+  },
+  stockText: {
+    fontSize: 13,
+    color: '#666',
+    fontStyle: 'italic',
+  },
+  
+  // Section Title Row
+  sectionTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
+    gap: 8,
+  },
+  
+  // Description
+  descriptionBox: { 
+    backgroundColor: 'white', 
+    marginHorizontal: 15, 
+    marginTop: 15, 
+    borderRadius: 10, 
+    padding: 15,
+  },
+  descriptionTitle: { 
+    fontWeight: 'bold', 
+    fontSize: 16,
+    color: '#333',
+  },
+  descriptionText: { 
+    fontSize: 14, 
+    color: '#555', 
+    lineHeight: 22,
+  },
+  
+  // Details
+  detailsBox: { 
+    backgroundColor: 'white', 
+    marginHorizontal: 15, 
+    marginTop: 15, 
+    borderRadius: 10, 
+    padding: 15,
+  },
+  detailsTitle: { 
+    fontWeight: 'bold', 
+    fontSize: 16,
+    color: '#333',
+  },
+  detailRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+    gap: 8,
+  },
+  detailsText: { 
+    fontSize: 14, 
+    color: '#555',
+    lineHeight: 20,
+    flex: 1,
+  },
+  
+  // Shipping
+  shippingBox: {
+    backgroundColor: 'white',
+    marginHorizontal: 15,
+    marginTop: 15,
+    borderRadius: 10,
+    padding: 15,
+    marginBottom: 20,
+  },
+  shippingTitle: {
+    fontWeight: 'bold',
+    fontSize: 16,
+    color: '#333',
+  },
+  shippingText: {
+    fontSize: 14,
+    color: '#555',
+    lineHeight: 20,
+    flex: 1,
+  },
+  
+  // Action Buttons
+  actionButtons: {
+    flexDirection: 'row',
+    marginHorizontal: 15,
+    marginTop: 10,
+    marginBottom: 30,
+    gap: 10,
+  },
+  addToCartButton: {
+    flex: 1,
+    flexDirection: 'row',
+    backgroundColor: '#A68C7B',
+    paddingVertical: 14,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+  },
+  addToCartText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  buyNowButton: {
+    flex: 1,
+    backgroundColor: '#333',
+    paddingVertical: 14,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  buyNowText: {
+    color: '#fff',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+});
+
+export default ViewNormalMarketScreen;
