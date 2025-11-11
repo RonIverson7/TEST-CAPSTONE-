@@ -349,6 +349,18 @@ export default function MyOrdersScreen() {
     <SafeAreaView style={styles.safeArea}>
       <Header title="My Orders" showSearch={false} />
       
+      {/* Back Button for iOS */}
+      <View style={styles.backButtonContainer}>
+        <TouchableOpacity 
+          style={styles.backButton}
+          onPress={() => router.push('/(drawer)/marketplace')}
+          activeOpacity={0.7}
+        >
+          <Ionicons name="arrow-back" size={24} color="#A68C7B" />
+          <Text style={styles.backButtonText}>Back to Marketplace</Text>
+        </TouchableOpacity>
+      </View>
+      
       {loading ? (
         <View style={styles.loadingContainer}>
           <ActivityIndicator size="large" color="#A68C7B" />
@@ -837,6 +849,24 @@ const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: '#fff',
+  },
+  backButtonContainer: {
+    backgroundColor: '#fff',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f0f0f0',
+  },
+  backButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 8,
+  },
+  backButtonText: {
+    fontSize: 16,
+    color: '#A68C7B',
+    marginLeft: 8,
+    fontWeight: '500',
   },
   loadingContainer: {
     flex: 1,
