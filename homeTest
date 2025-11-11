@@ -1660,7 +1660,16 @@ const HomeScreen = () => {
             style={{ flex: 1 }}
             keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 0}
           >
-            <View style={{ flexDirection: 'row', alignItems: 'center', padding: 10 }}>
+            <View style={{ 
+              flexDirection: 'row', 
+              alignItems: 'center', 
+              paddingHorizontal: 10, 
+              paddingTop: 5,
+              paddingBottom: 8,
+              backgroundColor: '#f5f5f5', 
+              borderBottomWidth: 1, 
+              borderBottomColor: '#e0e0e0' 
+            }}>
               <TouchableOpacity onPress={() => {
                 Keyboard.dismiss();
                 setCommentModalVisible(false);
