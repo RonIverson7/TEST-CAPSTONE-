@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { StyleSheet, View, Text, SafeAreaView, Image, TouchableOpacity, Modal, TextInput, TouchableWithoutFeedback, FlatList, ScrollView, Platform, KeyboardAvoidingView, Keyboard, Dimensions, BackHandler, RefreshControl, Alert } from 'react-native';
+import { StyleSheet, View, Text, SafeAreaView, Image, TouchableOpacity, Modal, TextInput, TouchableWithoutFeedback, FlatList, ScrollView, Platform, KeyboardAvoidingView, Keyboard, Dimensions, BackHandler, RefreshControl, Alert, ActivityIndicator } from 'react-native';
 import { Feather, Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
 import DateTimePicker from '@react-native-community/datetimepicker';
@@ -7,7 +7,7 @@ import Header from '../components/Header';
 import { supabase } from "../../supabase/supabaseClient";
 import { useRouter, useFocusEffect } from "expo-router";
 import { useUser } from '../contexts/UserContext';
-
+import AndroidFooterSpacer from '../components/Footer';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
@@ -55,6 +55,14 @@ const HomeScreen = () => {
   const [commentMenuForId, setCommentMenuForId] = useState(null);
   const [editingCommentId, setEditingCommentId] = useState(null);
   const [editCommentText, setEditCommentText] = useState('');
+  const [commentPage, setCommentPage] = useState(1);
+  const [hasMoreComments, setHasMoreComments] = useState(true);
+  const [loadingMoreComments, setLoadingMoreComments] = useState(false);
+  
+  // Keyboard visibility tracking (for Android behavior like viewGallery)
+  const [keyboardVisible, setKeyboardVisible] = useState(false);
+  const [keyboardHeight, setKeyboardHeight] = useState(0);
+  const commentListRef = React.useRef(null);
 
 
   // Profile modal and fields
@@ -87,6 +95,28 @@ const HomeScreen = () => {
     });
     return () => sub.remove();
   }, [commentModalVisible]);
+
+  // Keyboard listeners (exact pattern from viewGallery for proper reset)
+  useEffect(() => {
+    const onShow = (e) => {
+      setKeyboardVisible(true);
+      if (Platform.OS === 'android') {
+        setKeyboardHeight(e.endCoordinates.height);
+        // Auto-scroll to show the input when keyboard appears
+        setTimeout(() => {
+          commentListRef.current?.scrollToEnd({ animated: true });
+        }, 100);
+      }
+    };
+    const onHide = () => {
+      setKeyboardVisible(false);
+      setKeyboardHeight(0);
+    };
+
+    const subShow = Keyboard.addListener(Platform.OS === 'ios' ? 'keyboardWillShow' : 'keyboardDidShow', onShow);
+    const subHide = Keyboard.addListener(Platform.OS === 'ios' ? 'keyboardWillHide' : 'keyboardDidHide', onHide);
+    return () => { try { subShow.remove(); subHide.remove(); } catch {} };
+  }, []);
 
 
   const [firstName, setFirstName] = useState("");
@@ -226,8 +256,15 @@ const HomeScreen = () => {
               },
             });
             if (!res.ok) throw new Error('Failed to delete');
-            // Local remove
+            
+            // Local remove from comments list
             setCurrentPostComments(prev => prev.filter(c => c.id !== comment.id));
+            
+            // Update comment count
+            setComments(prev => ({
+              ...prev,
+              [currentPostId]: Math.max(0, (prev[currentPostId] || 1) - 1),
+            }));
           } catch (e) {
             console.error(e);
             Alert.alert('Delete Comment', 'Unable to delete comment.');
@@ -612,12 +649,17 @@ const HomeScreen = () => {
   const handleLike = async (postId) => {
     const alreadyLiked = userLikes[postId] || false;
 
-
+    // Optimistic update for user like status
     setUserLikes(prev => ({
       ...prev,
       [postId]: !alreadyLiked,
     }));
 
+    // Optimistic update for like count
+    setLikes(prev => ({
+      ...prev,
+      [postId]: alreadyLiked ? (prev[postId] || 1) - 1 : (prev[postId] || 0) + 1,
+    }));
 
     try {
       const res = await fetch(`${API_BASE}/homepage/createReact`, {
@@ -629,34 +671,71 @@ const HomeScreen = () => {
         body: JSON.stringify({ postId }),
       });
 
-
       if (!res.ok) throw new Error(`Failed to react (${res.status})`);
-      await fetchPosts();
+      // Don't refetch all posts, just keep optimistic update
     } catch (e) {
       console.error(e.message);
+      // Revert on error
       setUserLikes(prev => ({
         ...prev,
         [postId]: alreadyLiked,
+      }));
+      setLikes(prev => ({
+        ...prev,
+        [postId]: alreadyLiked ? (prev[postId] || 0) + 1 : (prev[postId] || 1) - 1,
       }));
     }
   };
 
 
-  const openCommentsModal = async (postId) => {
+  const openCommentsModal = async (postId, page = 1) => {
     try {
-      setLoading(true);
-      const res = await fetch(`${API_BASE}/homepage/getComments?postId=${postId}`, {
+      if (page === 1) {
+        setLoading(true);
+        setCurrentPostComments([]);
+        setCommentPage(1);
+        setHasMoreComments(true);
+      } else {
+        setLoadingMoreComments(true);
+      }
+      
+      const res = await fetch(`${API_BASE}/homepage/getComments?postId=${postId}&page=${page}&limit=10`, {
         method: 'GET',
         headers: { 'Cookie': `access_token=${accessToken}; refresh_token=${refreshToken}` },
       });
       const data = await res.json();
-      setCurrentPostComments(data.comments || []);
+      const newComments = data.comments || [];
+      
+      if (page === 1) {
+        setCurrentPostComments(newComments);
+      } else {
+        setCurrentPostComments(prev => [...prev, ...newComments]);
+      }
+      
       setCurrentPostId(postId);
-      setCommentModalVisible(true);
+      setCommentPage(page);
+      setHasMoreComments(newComments.length >= 10);
+      
+      if (page === 1) {
+        setCommentModalVisible(true);
+      }
     } catch (err) {
       setError(err.message);
     } finally {
       setLoading(false);
+      setLoadingMoreComments(false);
+    }
+  };
+  
+  const loadMoreComments = () => {
+    if (!loadingMoreComments && hasMoreComments && currentPostId) {
+      openCommentsModal(currentPostId, commentPage + 1);
+    }
+  };
+  
+  const showLessComments = () => {
+    if (currentPostId) {
+      openCommentsModal(currentPostId, 1);
     }
   };
 
@@ -664,9 +743,17 @@ const HomeScreen = () => {
   const postComment = async () => {
     if (!newCommentText.trim()) return;
 
+    // Optimistic update for comment count
+    setComments(prev => ({
+      ...prev,
+      [currentPostId]: (prev[currentPostId] || 0) + 1,
+    }));
+
+    const commentTextToSend = newCommentText;
+    setNewCommentText('');
 
     try {
-      await fetch(`${API_BASE}/homepage/createComment`, {
+      const res = await fetch(`${API_BASE}/homepage/createComment`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -674,14 +761,23 @@ const HomeScreen = () => {
         },
         body: JSON.stringify({
           postId: currentPostId,
-          text: newCommentText,
+          text: commentTextToSend,
         }),
       });
-      setNewCommentText('');
-      openCommentsModal(currentPostId); // refresh comments
-      fetchPosts();
+
+      if (!res.ok) throw new Error('Failed to post comment');
+
+      // Refresh comments list to show the new comment
+      openCommentsModal(currentPostId);
     } catch (err) {
       console.error(err);
+      // Revert comment count on error
+      setComments(prev => ({
+        ...prev,
+        [currentPostId]: Math.max(0, (prev[currentPostId] || 1) - 1),
+      }));
+      setNewCommentText(commentTextToSend); // Restore text
+      Alert.alert('Error', 'Failed to post comment');
     }
   };
 
@@ -1560,20 +1656,25 @@ const HomeScreen = () => {
       >
         <SafeAreaView style={{ flex: 1, backgroundColor: '#f5f5f5' }}>
           <KeyboardAvoidingView
-            behavior={Platform.OS === "ios" ? "padding" : "height"}
+            behavior={Platform.OS === "ios" ? "padding" : undefined}
             style={{ flex: 1 }}
-            keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 20}
+            keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 0}
           >
             <View style={{ flexDirection: 'row', alignItems: 'center', padding: 10 }}>
-              <TouchableOpacity onPress={() => setCommentModalVisible(false)}>
+              <TouchableOpacity onPress={() => {
+                Keyboard.dismiss();
+                setCommentModalVisible(false);
+              }}>
                 <Ionicons name="arrow-back" size={24} color="#000" />
               </TouchableOpacity>
               <Text style={{ fontSize: 18, fontWeight: 'bold', marginLeft: 10 }}>Comments</Text>
             </View>
             <FlatList
+              ref={commentListRef}
               data={currentPostComments}
               keyExtractor={(item) => item.id.toString()}
               renderItem={renderComment}
+              keyboardShouldPersistTaps="handled"
               ListEmptyComponent={
                 <View style={styles.emptyCommentsContainer}>
                   <Ionicons name="chatbubbles-outline" size={64} color="#A68C7B" style={{ marginBottom: 12 }} />
@@ -1581,7 +1682,43 @@ const HomeScreen = () => {
                   <Text style={styles.emptyCommentsSubtext}>Be the first to comment!</Text>
                 </View>
               }
-              contentContainerStyle={currentPostComments.length === 0 ? { flex: 1 } : { paddingVertical: 16 }}
+              ListFooterComponent={
+                currentPostComments.length > 0 ? (
+                  <View>
+                    {commentPage > 1 && (
+                      <TouchableOpacity 
+                        style={[styles.loadMoreCommentsButton, { backgroundColor: '#fff' }]} 
+                        onPress={showLessComments}
+                      >
+                        <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                          <Text style={styles.loadMoreCommentsText}>Show Less</Text>
+                          <Ionicons name="chevron-up" size={16} color="#A68C7B" style={{ marginLeft: 4 }} />
+                        </View>
+                      </TouchableOpacity>
+                    )}
+                    {hasMoreComments && (
+                      <TouchableOpacity 
+                        style={styles.loadMoreCommentsButton} 
+                        onPress={loadMoreComments}
+                        disabled={loadingMoreComments}
+                      >
+                        {loadingMoreComments ? (
+                          <ActivityIndicator size="small" color="#A68C7B" />
+                        ) : (
+                          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
+                            <Text style={styles.loadMoreCommentsText}>Load More Comments</Text>
+                            <Ionicons name="chevron-down" size={16} color="#A68C7B" style={{ marginLeft: 4 }} />
+                          </View>
+                        )}
+                      </TouchableOpacity>
+                    )}
+                  </View>
+                ) : null
+              }
+              contentContainerStyle={[
+                currentPostComments.length === 0 ? { flex: 1 } : { paddingVertical: 16 },
+                Platform.OS === 'android' && keyboardVisible && { paddingBottom: keyboardHeight + 60 }
+              ]}
             />
             <View style={styles.commentInputContainer}>
               <TextInput
@@ -1818,7 +1955,7 @@ const HomeScreen = () => {
           </View>
         </TouchableWithoutFeedback>
       </Modal>
-   
+      <AndroidFooterSpacer />
     </SafeAreaView>
   );
 };
@@ -2021,6 +2158,22 @@ const styles = StyleSheet.create({
   emptyCommentsSubtext: {
     fontSize: 14,
     color: '#999',
+  },
+  loadMoreCommentsButton: {
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    marginVertical: 16,
+    marginHorizontal: 16,
+    backgroundColor: '#f5f5f5',
+    borderRadius: 8,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#e0e0e0',
+  },
+  loadMoreCommentsText: {
+    fontSize: 14,
+    color: '#A68C7B',
+    fontWeight: '600',
   },
   modalOverlay: {
     flex: 1,
