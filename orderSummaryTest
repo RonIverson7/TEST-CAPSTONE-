@@ -5,7 +5,6 @@ import { useRouter } from 'expo-router';
 import { supabase } from '../../supabase/supabaseClient';
 import { useUser } from '../contexts/UserContext';
 import Header from '../components/Header';
-import AndroidFooterSpacer from '../components/Footer';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 const API_BASE = "http://192.168.18.22:3000/api";
@@ -21,7 +20,7 @@ const OrderSummaryScreen = () => {
   const [refreshing, setRefreshing] = useState(false);
   const [selectedAddress, setSelectedAddress] = useState(null);
   const [addresses, setAddresses] = useState([]);
-  const [selectedPayment, setSelectedPayment] = useState('cod');
+  // Payment method removed - Xendit handles this during payment
   const [selectedShipping, setSelectedShipping] = useState('standard');
   const [orderNotes, setOrderNotes] = useState('');
   const [showAddAddress, setShowAddAddress] = useState(false);
@@ -85,9 +84,9 @@ const OrderSummaryScreen = () => {
         const result = await response.json();
         
         if (!result.data.items || result.data.items.length === 0) {
-          Alert.alert('Empty Cart', 'Your cart is empty', [
-            { text: 'OK', onPress: () => router.push('/(drawer)/marketplace') }
-          ]);
+          // Silently redirect to marketplace if cart is empty
+          setCartItems([]);
+          router.replace('/(drawer)/marketplace');
           return;
         }
         
@@ -340,7 +339,7 @@ const OrderSummaryScreen = () => {
           email: userData?.email || '',
           phone: address?.phoneNumber || address?.phone || '',
         },
-        payment_method: selectedPayment,
+        payment_method: 'xendit', // Xendit handles actual payment method selection
         shipping_method: selectedShipping,
         order_notes: orderNotes,
       };
@@ -365,7 +364,7 @@ const OrderSummaryScreen = () => {
         const paymentUrl = result?.data?.payment?.paymentUrl;
         
         if (paymentUrl) {
-          // For payment methods that require external payment (card, gcash, bank)
+          // Xendit payment URL - user selects payment method on Xendit page
           Alert.alert(
             'Order Created',
             `Order #${orderId} created successfully! Please complete payment in the browser.`,
@@ -390,7 +389,7 @@ const OrderSummaryScreen = () => {
             ]
           );
         } else {
-          // For COD or other payment methods without payment URL
+          // Fallback if no payment URL (shouldn't happen with Xendit)
           Alert.alert(
             'Order Placed',
             `Order #${orderId} placed successfully!`,
@@ -509,79 +508,7 @@ const OrderSummaryScreen = () => {
           ))}
         </View>
 
-        {/* Payment Method */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Payment Method</Text>
-          {[
-            { id: 'card', name: 'Credit/Debit Card', desc: 'Visa, Mastercard, Amex', icon: 'card-outline' },
-            { id: 'gcash', name: 'GCash', desc: 'Digital wallet payment', icon: 'wallet-outline' },
-            { id: 'bank', name: 'Bank Transfer', desc: 'Direct bank payment', icon: 'cash-outline' },
-            { id: 'cod', name: 'Cash on Delivery', desc: 'Pay when you receive', icon: 'cube-outline' },
-          ].map(method => (
-            <TouchableOpacity
-              key={method.id}
-              style={[styles.optionCard, selectedPayment === method.id && styles.optionCardSelected]}
-              onPress={() => setSelectedPayment(method.id)}
-            >
-              <View style={styles.optionRadio}>
-                {selectedPayment === method.id && <View style={styles.optionRadioSelected} />}
-              </View>
-              <Ionicons name={method.icon} size={24} color="#A68C7B" style={{ marginRight: 10 }} />
-              <View style={styles.optionInfo}>
-                <Text style={styles.optionTitle}>{method.name}</Text>
-                <Text style={styles.optionDesc}>{method.desc}</Text>
-              </View>
-            </TouchableOpacity>
-          ))}
-          
-          {/* Card Payment Form */}
-          {selectedPayment === 'card' && (
-            <View style={styles.cardFormContainer}>
-              <View style={styles.formGroup}>
-                <Text style={styles.formLabel}>Card Number</Text>
-                <TextInput
-                  style={styles.formInput}
-                  placeholder="1234 5678 9012 3456"
-                  placeholderTextColor="#999"
-                  keyboardType="number-pad"
-                  maxLength={19}
-                />
-              </View>
-              <View style={styles.formRowModal}>
-                <View style={[styles.formGroup, { flex: 1, marginRight: 8 }]}>
-                  <Text style={styles.formLabel}>Expiry Date</Text>
-                  <TextInput
-                    style={styles.formInput}
-                    placeholder="MM/YY"
-                    placeholderTextColor="#999"
-                    keyboardType="number-pad"
-                    maxLength={5}
-                  />
-                </View>
-                <View style={[styles.formGroup, { flex: 1, marginLeft: 8 }]}>
-                  <Text style={styles.formLabel}>CVV</Text>
-                  <TextInput
-                    style={styles.formInput}
-                    placeholder="123"
-                    placeholderTextColor="#999"
-                    keyboardType="number-pad"
-                    maxLength={4}
-                    secureTextEntry
-                  />
-                </View>
-              </View>
-              <View style={styles.formGroup}>
-                <Text style={styles.formLabel}>Cardholder Name</Text>
-                <TextInput
-                  style={styles.formInput}
-                  placeholder="John Doe"
-                  placeholderTextColor="#999"
-                  autoCapitalize="words"
-                />
-              </View>
-            </View>
-          )}
-        </View>
+        {/* Payment Method Section Removed - Xendit handles payment method selection */}
 
         {/* Order Notes */}
         <View style={styles.section}>
@@ -630,7 +557,6 @@ const OrderSummaryScreen = () => {
             </>
           )}
         </TouchableOpacity>
-        <AndroidFooterSpacer backgroundColor="#fff" />
       </View>
 
       {/* Add Address Modal */}
@@ -1218,7 +1144,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 16,
+    marginBottom: 14,
   },
   modalTitle: {
     fontSize: 20,
